@@ -16,7 +16,7 @@ dataset_size = 1024*8
 valset_size = 1024
 batch_size = 256
 output_size = 1
-epochs = 10
+epochs = 30
 learning_rate = 0.01
 
 # train_loader = DataLoader(train_ds, batch_size, shuffle=True)
@@ -123,15 +123,16 @@ val_set = SinDataset(size = valset_size,
 
 model = SinModel()
 
-fig, (ax1, ax2) = plt.subplots(2, 2)
+fig, (ax1, ax2, ax3) = plt.subplots(3, 2)
 fig.suptitle('NN training')
-ax1[0].set_title('Training data example')
+ax1[0].set_title('Training data examples')
 ax1[0].set_ylabel('Amplitude')
 ax1[0].set_xlabel('time (s)')
 for data,labels in train_set:    
     print(data.shape)    
     ax1[0].plot(train_set.time,data[0,:])
-    ax1[0].plot(train_set.time,data[1,:])   
+    ax1[0].plot(train_set.time,data[1,:])
+    ax1[0].plot(train_set.time,data[2,:])
     print(labels.shape)
     print(getFrequencies(labels).shape)
     out = model(data)
@@ -142,18 +143,28 @@ print('Train NN')
 losses, epoch_acc = fit(epochs,
   learning_rate,
   model, train_set, val_set)
+
+ax1[1].set_title('Validation: NN estimate vs real')
+data, label = val_set[0]
+out = model(data)
+ax1[1].plot(val_set.time,data)
+signal = torch.sin(val_set.time *(out*10 + 45)*2*np.pi)
+ax1[1].plot(val_set.time,signal.detach())
+
 ax2[0].set_title('Training losses')
 ax2[0].set_ylabel('Loss')
 ax2[0].set_xlabel('batch')
 ax2[0].plot(losses)
 
 ax2[1].set_title('Epoch validation accuracy')
-ax2[1].set_ylabel('Max frequency difference')
+ax2[1].set_ylabel('Frequency deviation')
 ax2[1].set_xlabel('epoch')
 ax2[1].plot(epoch_acc)
 
-ax1[1].set_title('Linear weghts')
-print(model.network[6].weight)
+ax3[0].set_title('Weights: layer 1, neuron 1')
+ax3[0].plot(model.network[0].weight.detach()[0,:].flatten(),'.')
+ax3[1].set_title('Weights: layer 1  neuron 2')
+ax3[1].plot(model.network[0].weight.detach()[1,:].flatten(),'.')
 
 plt.tight_layout()
 plt.show()
