@@ -2,6 +2,7 @@ import data_generator as dg
 import torch
 from collections import OrderedDict
 import matplotlib.pyplot as plt
+from matplotlib import animation
 from torch.utils.data import DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,7 +18,11 @@ valset_size = 1024
 batch_size = 256
 output_size = 1
 epochs = 30
-learning_rate = 0.01
+learning_rate = 0.1
+
+min_frequency = 45
+max_frequency = 55
+delta_frequency = max_frequency - min_frequency
 
 # train_loader = DataLoader(train_ds, batch_size, shuffle=True)
 # val_loader = DataLoader(val_ds, batch_size)
@@ -32,13 +37,9 @@ class SinModel(nn.Module):
         super().__init__()
 
         self.network = nn.Sequential(OrderedDict([
-            ('0', nn.Linear(input_size, 2)),
-            ('1',nn.ReLU()),
-            ('2',nn.Linear(2,2)),
-            ('3',nn.ReLU()),
-            ('4',nn.Linear(2,3)),
-            ('5',nn.ReLU()),
-            ('6',nn.Linear(3,output_size))
+            ('input-hidden', nn.Linear(input_size, 2)),
+            ('activation',nn.LeakyReLU(0.01)),            
+            ('hidden-output',nn.Linear(2,output_size))
             ]))
         
     def forward(self, xb):
@@ -50,14 +51,14 @@ class SinModel(nn.Module):
         labels = getFrequencies(labels)
         out = self(data)                  # Generate predictions
         loss_fn = nn.MSELoss()        
-        return loss_fn(out,labels)
+        return loss_fn(out,labels).exp()
     
     def validation_step(self, batch):
         data, labels = batch 
         labels = getFrequencies(labels)        
         out = self(data)
         loss_fn = nn.MSELoss()        # Generate predictions
-        loss = loss_fn(out,labels)              
+        loss = loss_fn(out,labels).exp()            
         acc = accuracy(out,labels)         
         return {'val_loss': loss, 'val_acc': acc}
         
@@ -81,38 +82,77 @@ def evaluate(model, val_set):
     outputs = [model.validation_step(batch) for batch in val_set]
     return model.validation_epoch_end(outputs)
 
-def fit(epochs, start_learning_rate, model, train_set, val_set, opt_func=torch.optim.Adam):
+def fit(epochs, start_learning_rate,
+ model,
+ train_set, val_set,
+ opt_func=torch.optim.SGD):
     """Train the model using gradient descent"""
     losses = []
     epoch_acc = []
-    lr = learning_rate    
+    weights = []
+    lr = learning_rate 
+    weights.append(getWeights(model))
     for epoch in range(epochs):
-        # Training Phase 
         optimizer = opt_func(model.parameters(), lr)
-        for batch in train_set:
+        for batch in train_set:                        
             loss = model.training_step(batch)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             losses.append(loss.item())
+            weights.append(getWeights(model))
         # Validation phase
         result = evaluate(model, val_set)
         model.epoch_end(epoch, result)
-        epoch_acc.append(result['val_acc'])        
+        epoch_acc.append(result['val_acc'])                
 
-    return losses, epoch_acc
+    return losses, epoch_acc, weights
 
 def getFrequencies(labels):
-    return (labels[:,1].view(-1,1) - 45)/10
+    return (labels[:,1].view(-1,1) - min_frequency)/delta_frequency
 
 def conertFreqsDiffBack(freqs):
-    return freqs * 10
+    return freqs * delta_frequency
+
+def getWeights(model):
+    w1 = model.network[0].weight.detach().clone()[0,:].flatten()    
+    w2 = model.network[0].weight.detach().clone()[1,:].flatten()  
+    w = torch.cat((w1,w2), 0)
+    return w
+
+def saveDataAnimation(data):
+    fig = plt.figure()    
+    data_size = len(data[0])    
+    ax = plt.axes(xlim=(0, data_size), ylim=(torch.min(data[1])*1.5, torch.max(data[1])*1.5))
+    scatter_plot = ax.scatter([], [], s=1)
+     
+    def init():
+        print('Saving gifs')
+        scatter_plot.set_offsets([])
+        return scatter_plot,
+    def animate(i):
+        x = np.arange(data_size)        
+        y = data[i].numpy() 
+        offsets = np.stack((x,y)).T
+        scatter_plot.set_offsets(offsets)        
+        if (i%64 == 0):
+            print('{}%'.format(round(100*i/len(data))))
+        return scatter_plot,
+
+    anim = animation.FuncAnimation(fig, animate, init_func=init,
+                                   frames=len(data), interval=20, blit=False)    
+    writergif = animation.PillowWriter(fps=60)
+    anim.save('weights.gif',writer=writergif)
+    plt.close(fig)
 
 # generate data and data loaders
 print('Genering train_set')
 train_set = SinDataset(size = dataset_size,
  samples = input_size,
- batch_size = batch_size)
+ batch_size = batch_size,
+ min_freq = min_frequency,
+ max_freq = max_frequency,
+ )
 # train_set.saveCsv('train')
 
 print('Genering val_set')
@@ -140,15 +180,17 @@ for data,labels in train_set:
     break
 
 print('Train NN')
-losses, epoch_acc = fit(epochs,
+losses, epoch_acc, weights = fit(epochs,
   learning_rate,
   model, train_set, val_set)
+
+saveDataAnimation(weights)
 
 ax1[1].set_title('Validation: NN estimate vs real')
 data, label = val_set[0]
 out = model(data)
 ax1[1].plot(val_set.time,data)
-signal = torch.sin(val_set.time *(out*10 + 45)*2*np.pi)
+signal = torch.sin(val_set.time *(out*delta_frequency + min_frequency)*2*np.pi)
 ax1[1].plot(val_set.time,signal.detach())
 
 ax2[0].set_title('Training losses')
@@ -163,8 +205,17 @@ ax2[1].plot(epoch_acc)
 
 ax3[0].set_title('Weights: layer 1, neuron 1')
 ax3[0].plot(model.network[0].weight.detach()[0,:].flatten(),'.')
+
 ax3[1].set_title('Weights: layer 1  neuron 2')
 ax3[1].plot(model.network[0].weight.detach()[1,:].flatten(),'.')
-
 plt.tight_layout()
+
+# fig, (ax1, ax2, ax3) = plt.subplots(3, 2)
+# fig.suptitle('NN training')
+# ax1[0].set_title('Weights: layer 2, neuron 1')
+# ax1[0].plot(model.network[2].weight.detach()[0,:].flatten(),'.')
+# ax1[1].set_title('Weights: layer 2  neuron 2')
+# ax1[1].plot(model.network[2].weight.detach()[1,:].flatten(),'.')
+
+# plt.tight_layout()
 plt.show()

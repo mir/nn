@@ -3,15 +3,18 @@ import numpy as np
 
 class SinDataset(torch.utils.data.IterableDataset):
   'Characterizes a dataset for PyTorch'
-  def __init__(self, size, samples, batch_size = 8):
+  def __init__(self, size, samples, batch_size = 8, min_freq = 45, max_freq = 55):
     'Initialization'
-    data, labels = self.sin_data(size=size, samples=samples)
+    data, labels = self.sin_data(size=size,
+     samples=samples,
+     min_freq = min_freq,
+     max_freq = max_freq)
     self.labels = labels
     self.data = data
     self.size = size
     self.samples = samples
     self.batch_size = batch_size
-    self.position = 0
+    self.position = 0    
 
   def __len__(self):
     'Denotes the total number of samples'
